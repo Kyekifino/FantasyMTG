@@ -1,0 +1,13 @@
+[Unit]
+Description=Back up the Fantasy MTG database
+
+[Service]
+Type=oneshot
+User=fantasymtg
+Group=fantasymtg
+ExecStart=/opt/fantasymtg/venv/bin/python -m fantasymtg.adapters.sqlite_backup /var/lib/fantasymtg/fantasymtg.db /var/lib/fantasymtg/backups --keep 14
+StateDirectory=fantasymtg
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

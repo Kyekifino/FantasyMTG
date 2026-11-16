@@ -1,0 +1,31 @@
+[Unit]
+Description=Fantasy MTG Discord bot
+# Raspberry Pis have no hardware clock. After a power cut the Pi boots with a stale time,
+# then corrects it over the network. time-sync.target is only reached once the clock is
+# actually synced (install.sh enables systemd-time-wait-sync.service), so the bot never
+# runs game timers against a wrong clock.
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+# Keep retrying forever (e.g. while the router is still booting after an outage).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=fantasymtg
+Group=fantasymtg
+EnvironmentFile=/etc/fantasymtg/fantasymtg.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/fantasymtg/venv/bin/fantasymtg-discord
+Restart=always
+RestartSec=15
+StateDirectory=fantasymtg
+WorkingDirectory=/var/lib/fantasymtg
+
+# Hardening: the bot only needs to write its own state directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

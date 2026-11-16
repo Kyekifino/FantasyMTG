@@ -1,0 +1,31 @@
+Fantasy MTG
+
+# Concept
+
+Fantasy football like game, where a group of players spend a finite budget buying and selling Magic the Gathering cards, with the goal of amassing the highest total value across the length of the game. Players who are able to predict the future price movements of cards will have a strong advantage.
+
+# Rules
+
+NOTE: Words in [[]] are variables that should be adjustable before starting the game. The number after the "=" is the default value.
+
+The game begins on [[startDate=today]] and lasts until [[endDate=today+1 year]]. A group of up to [[maxPlayerCount=10]] players are assigned a starting budget of [[startingBudget=100]] dollars. At any time, a player may make a trade, where they can either buy some number of copies of a card, or sell some number of copies of a card they already have. A player may have any number of a given card, but can only have up to [[maxSpecNumber=5]] different cards in their inventory at a given time. Any given treatment of a card (aka, having it's own Scryfall page) is considered a unique card. The price is reflected by the TCGPlayer market price, as reported on Scryfall. If Scryfall does not report the price for a given card, it cannot be bought or sold. To discourage "day trading", each trade (buy or sell) includes a trade fee of [[tradeFee=2]] dollars. After every [[topOffDays=30]], each player is given an additional budget of [[topOffBudget=20]], to help players who made poor trades catch back up. In order to successfully make a purchase, the player must be able to pay the entire cost, including the trade fee. There is an optional setting, [[uniqueOwnership=true]], which if true means that only one player may own a given card at a time.
+
+# Interface
+
+I want this game to run as a Discord bot, that can be interacted with on your own time. All commands should yield some response from the bot. I'd like to include the following commands:
+- createGame - This command creates a new instance of Fantasy MTG, tied to the Discord Server and channel in which the command is called. This command assigns the person who called the command as the game admin, giving only them access to configure the variables of the game.
+- configure [[variable]] [[value]] - Set the value of a given variable to a given value (if applicablel; typing matters). If the game is already started, it will ask for confirmation from the admin via a thumbs-up emoji or a thumbs-down emoji reaction before applying. Reactions from other users should be ignored.
+- joinGame [[name]] - Add yourself as a player to a game that has been created, but not started. Assign the player the name provided. If the game is already in session, politely explain the user cannot join. If the game is fully, politely explain the user cannot join.
+- startGame - Start the game with the players added and the configuration set.
+- buy [[scryfallLink]] [[quantity]] - Attempt to purchase the card listed in the given Scryfall link, at the quantity shown. If the player has insufficient funds to buy at that price, plus the trade fee, politely explain the user has insuffient funds. If uniqueOwnership is set, and another player already owns that card, politely explain that another user owns the card. If they have enough funds, send a message showing the potential transaction, and ask for confirmatioin from the buyer via a thumbs-up or a thumbs-down emoji reaction. Reactions from other users should be ignored. If they thumbs up, allow them to buy at the price shown when they sent the message. If it has been more than 30 minutes without a thumbs-up, the user's request should be discarded, and a reaction after the fact should be met with a polite response that it's been too long and to try again. If uniqueOwnership is set, and another player already owns the card once the user gives a thumbs-up, politely explain that another user owns the card.
+- sell [[scryfallLink]] [[quantity]] - Attempt to sell the card listed in the given Scryfall link, at the quantity shown. If the sale, minus the trade fee, would put the user at a negative balance, politely explain the user has insuffient funds. If the user does not own at least that quantity of that card, politely explain the user cannot sell something they don't own. If they can sell, send a message showing the potential transaction, and ask for confirmatioin from the seller via a thumbs-up or a thumbs-down emoji reaction. Reactions from other users should be ignored. If they thumbs up, allow them to sell at the price shown when they sent the message. If it has been more than 30 minutes without a thumbs-up, the user's request should be discarded, and a reaction after the fact should be met with a polite response that it's been too long and to try again.
+- portfolio [[name]] - See the current list of cards and quantities owned by a given player, alongside their prices, in a table format. Show how much free budget they have, and their current total value (calculated as the sum of their holdings and free budget).
+- leaderboard - Show the players alongside their total value in order of their value, from greatest to least, in a tabular format.
+- help - List all commands with a brief explanation.
+- help [[command]] - Give an in-depth explanation of the command and how to use it.
+
+# Automatic Actions
+- If a transaction has been sitting without a response for 30 minutes, send a message explaining the timeout.
+- If a topOffBudget is provided, a message should be sent announcing it when it is doled out.
+- Every week, send an automatic message showing the leaderboard.
+- At the end of the game, send a final message showing the end game leaderboard, and congratulating the winner.

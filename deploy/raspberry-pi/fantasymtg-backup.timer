@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily backup of the Fantasy MTG database
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+# If the Pi was off at backup time, run the backup soon after it boots.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
