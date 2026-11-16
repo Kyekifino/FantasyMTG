@@ -15,12 +15,17 @@ async def _run() -> None:
     logging.basicConfig(
         level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    if settings.ignored:
+        logging.getLogger(__name__).warning(
+            "Ignoring %s: no longer used; commands now register in every server",
+            ", ".join(settings.ignored),
+        )
     from .bot import FantasyMTGBot  # imported late so settings errors show before discord.py loads
 
     repo = SqliteGameRepository(settings.db_path)
     prices = ScryfallPriceSource()
     service = GameService(repo, prices)
-    bot = FantasyMTGBot(service, dev_guild_id=settings.dev_guild_id, tick_seconds=settings.tick_seconds)
+    bot = FantasyMTGBot(service, tick_seconds=settings.tick_seconds)
     try:
         async with bot:
             await bot.start(settings.token)

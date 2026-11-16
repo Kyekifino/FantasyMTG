@@ -34,7 +34,13 @@ def test_fit_message_closes_code_blocks():
 
 
 def test_load_settings():
-    s = load_settings({"DISCORD_TOKEN": "t", "DISCORD_DEV_GUILD_ID": "99", "FANTASYMTG_TICK_SECONDS": "5"})
-    assert (s.token, s.dev_guild_id, s.tick_seconds, s.db_path) == ("t", 99, 5.0, "data/fantasymtg.db")
+    s = load_settings({"DISCORD_TOKEN": "t", "FANTASYMTG_TICK_SECONDS": "5"})
+    assert (s.token, s.tick_seconds, s.db_path, s.ignored) == ("t", 5.0, "data/fantasymtg.db", ())
     with pytest.raises(SystemExit):
         load_settings({})
+
+
+def test_obsolete_server_setting_is_flagged_not_used():
+    assert load_settings({"DISCORD_TOKEN": "t", "DISCORD_DEV_GUILD_ID": ""}).ignored == ()
+    s = load_settings({"DISCORD_TOKEN": "t", "DISCORD_DEV_GUILD_ID": "123"})
+    assert s.ignored == ("DISCORD_DEV_GUILD_ID",)

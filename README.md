@@ -7,15 +7,22 @@ logic doesn't depend on Discord.
 
 ## Self-hosting on Discord
 
+One running copy of the bot serves every server it's added to. Each channel can hold its own
+game, and adding the bot to a new server needs no changes on the machine running it.
+
 ### 1. Create the bot
 
 1. Go to <https://discord.com/developers/applications>, click **New Application**, and name it.
 2. Open **Bot**, click **Reset Token**, and copy the token. No privileged intents are needed.
-3. Open **OAuth2 → URL Generator**, tick the scopes `bot` and `applications.commands`, and the
-   bot permissions **View Channels**, **Send Messages**, **Add Reactions** and
-   **Read Message History**. Open the generated URL to invite the bot to your server.
-   Or fill in your application ID here:
-   `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=68672`
+   While you're there, decide on **Public Bot**: on lets anyone with the invite link add the
+   bot to their server; off means only you can add it.
+3. Open **Installation**:
+   - Under **Installation Contexts**, keep **Guild Install** ticked and untick **User Install**
+     (the commands only work in servers).
+   - Under **Install Link**, choose **Discord Provided Link**.
+   - Under **Default Install Settings → Guild Install**, add the scopes `applications.commands`
+     and `bot`, then the permissions **View Channels**, **Send Messages**, **Add Reactions** and
+     **Read Message History**. Save.
 
 ### 2. Configure
 
@@ -23,9 +30,17 @@ logic doesn't depend on Discord.
 cp .env.example .env
 ```
 
-Set `DISCORD_TOKEN` in `.env`. While you're testing, set `DISCORD_DEV_GUILD_ID` to your server's
-ID (Developer Mode → right-click the server → Copy Server ID) so slash commands appear instantly.
-Global commands can take up to an hour to show up the first time.
+Set `DISCORD_TOKEN` in `.env`. That's the only required setting.
+
+### Adding the bot to servers
+
+Open the install link from the **Installation** page, pick a server, and approve. You need the
+**Manage Server** permission in that server. You can share the link with other people the same
+way; if **Public Bot** is on, they can add the bot to their own servers.
+
+The bot registers its slash commands globally each time it starts, so they appear in every
+server, including ones it joins later. On the very first start they can take a few minutes to
+show up. If a channel restricts the bot, give it the four permissions above there.
 
 ### 3. Run with Docker (recommended)
 

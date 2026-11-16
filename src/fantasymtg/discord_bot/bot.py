@@ -53,14 +53,20 @@ class FantasyMTGBot(discord.Client):
         self,
         service: GameService,
         *,
-        dev_guild_id: int | None = None,
         tick_seconds: float = 60.0,
     ) -> None:
         # Default intents include guild reactions and exclude privileged message content.
         super().__init__(intents=discord.Intents.default(), allowed_mentions=ALLOWED_MENTIONS)
         self.service = service
-        self.tree = app_commands.CommandTree(self)
-        self._dev_guild_id = dev_guild_id
+        # Commands work in any server the bot is added to, and only in servers (not DMs).
+        self.tree = app_commands.CommandTree(
+            self,
+            allowed_contexts=app_commands.AppCommandContext(
+                guild=True, dm_channel=False, private_channel=False
+            ),
+            allowed_installs=app_commands.AppInstallationType(guild=True, user=False),
+        )
+        self._cleaned_guild_commands = False
         self._tick_seconds = tick_seconds
         self._ticker: asyncio.Task | None = None
         self._reconcile_lock = asyncio.Lock()
@@ -68,15 +74,30 @@ class FantasyMTGBot(discord.Client):
         _register_commands(self)
 
     async def setup_hook(self) -> None:
-        if self._dev_guild_id:
-            guild = discord.Object(id=self._dev_guild_id)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            log.info("Synced %d commands to dev guild %s", len(synced), self._dev_guild_id)
-        else:
-            synced = await self.tree.sync()
-            log.info("Synced %d global commands (may take a while to appear)", len(synced))
+        # Global registration: one set of commands for every server, including servers the
+        # bot joins later. Nothing needs to change on the host when it's added somewhere new.
+        synced = await self.tree.sync()
+        log.info("Registered %d slash commands globally", len(synced))
         self._ticker = asyncio.create_task(self._tick_loop())
+
+    async def remove_stale_guild_commands(self) -> int:
+        """Delete per-server command copies left by older versions (DISCORD_DEV_GUILD_ID).
+
+        Those copies would show up next to the global commands as duplicates. Returns the
+        number of servers cleaned.
+        """
+        cleaned = 0
+        for guild in list(self.guilds):
+            try:
+                if not await self.tree.fetch_commands(guild=guild):
+                    continue
+                self.tree.clear_commands(guild=guild)
+                await self.tree.sync(guild=guild)
+                cleaned += 1
+                log.info("Removed old server-specific commands from %s", guild.id)
+            except discord.HTTPException:
+                log.warning("could not check server-specific commands in %s", guild.id)
+        return cleaned
 
     async def close(self) -> None:
         if self._ticker:
@@ -86,10 +107,19 @@ class FantasyMTGBot(discord.Client):
     async def on_ready(self) -> None:
         # Fires on first login and again whenever a gateway session couldn't be resumed,
         # i.e. whenever reaction events may have been missed.
-        log.info("Logged in as %s (%s)", self.user, getattr(self.user, "id", "?"))
-        task = asyncio.create_task(self._reconcile_reactions())
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
+        log.info("Logged in as %s (%s) in %d servers", self.user, getattr(self.user, "id", "?"),
+                 len(self.guilds))
+        jobs = [self._reconcile_reactions()]
+        if not self._cleaned_guild_commands:
+            self._cleaned_guild_commands = True
+            jobs.append(self.remove_stale_guild_commands())
+        for job in jobs:
+            task = asyncio.create_task(job)
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        log.info("Added to server %s (%s)", guild.name, guild.id)
 
     # ------------------------------------------------------------------ commands
 
