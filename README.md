@@ -105,7 +105,10 @@ journalctl -u fantasymtg -f
 ```
 
 To upgrade, run `git pull` in the `FantasyMTG` folder and run `install.sh` again. Your settings and
-database are kept.
+database are kept, and the installer restarts the bot for you. Restarting never loses game state:
+every change (settings, players, trades, quotes waiting for a 👍) is saved the moment it happens,
+so a game you're still setting up is exactly as you left it. On stop, the bot finishes what it's
+doing before exiting, and newer versions automatically upgrade the database's format.
 
 What the installer sets up:
 
@@ -209,6 +212,13 @@ leaderboard, and the final standings with congratulations when the game ends.
 - **Downtime:** if the bot was offline, missed top-offs are paid out when it comes back,
   quotes that expired during downtime are announced, and reactions on still-open quotes are
   picked up after it reconnects.
+- **Internet outages:** the bot keeps running and reconnects on its own. Announcements it
+  couldn't post (timeouts, top-offs, leaderboards, the final standings) are saved and posted
+  in order once Discord is reachable again. If a channel is deleted or the bot loses access
+  to it, those announcements are dropped, and any announcement still unsent after 14 days is
+  dropped too.
+- **Game end:** trading always stops at `endDate`. The final standings wait for fresh
+  Scryfall prices for up to 6 hours, then fall back to the last known prices.
 
 ## Architecture
 
@@ -235,8 +245,13 @@ src/fantasymtg/
   (Discord uses `discord:<guild>:<channel>`) and a `user_id`. Confirmations are generic
   `PendingAction`s. An interface approves or declines them with `respond()` and can link its
   own handle (such as a message ID) with `attach_external_ref()`.
-- **Time-based rules** run in `GameService.tick()`, which returns notifications for the
-  interface to deliver. The Discord bot calls it every `FANTASYMTG_TICK_SECONDS`.
+- **Time-based rules** run in `GameService.tick()`. Each announcement is saved in the game's
+  outbox in the same write as the change that caused it. The interface reads queued
+  announcements with `undelivered()` and calls `mark_delivered()` once each one is posted, so
+  nothing is lost to a crash, restart or network outage. The Discord bot does this every
+  `FANTASYMTG_TICK_SECONDS`.
+- **Stored format** is versioned (`core/serialization.py`); older databases are upgraded when
+  they're loaded.
 - **Money** is stored as integer cents throughout.
 - **Layering is enforced** by `tests/test_architecture.py`, which fails if `core` imports an
   adapter, the presentation layer or Discord.

@@ -28,6 +28,14 @@ class InMemoryGameRepository:
             if self._games[gid]["status"] == GameStatus.ACTIVE.value
         ]
 
+    def get(self, game_id: str) -> Game | None:
+        data = self._games.get(game_id)
+        return game_from_dict(data) if data else None
+
+    def list_needing_attention(self) -> list[Game]:
+        games = [game_from_dict(self._games[gid]) for gid in self._order]
+        return [g for g in games if g.needs_attention]
+
     def save(self, game: Game) -> None:
         if game.id not in self._games:
             self._order.append(game.id)

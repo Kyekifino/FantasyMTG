@@ -35,6 +35,7 @@ from .results import (
     GameEnded,
     Leaderboard,
     Notification,
+    OutboxEntry,
     PendingTimedOut,
     Portfolio,
     PortfolioLine,
@@ -51,6 +52,8 @@ log = logging.getLogger(__name__)
 CONFIRM_TIMEOUT = timedelta(minutes=30)
 LEADERBOARD_INTERVAL = timedelta(days=7)
 PENDING_RETENTION = timedelta(days=2)  # keep resolved requests so late reactions get a reply
+OUTBOX_RETENTION = timedelta(days=14)  # give up on an announcement that can't be delivered
+FINAL_PRICE_GRACE = timedelta(hours=6)  # how long the final standings wait for fresh prices
 MAX_NAME_LENGTH = 32
 MAX_QUANTITY = 1_000_000
 
@@ -335,69 +338,116 @@ class GameService:
     # ------------------------------------------------------------------ scheduled jobs
 
     async def tick(self) -> list[Notification]:
-        """Run time-based rules for every active game. Call this periodically (~1 min)."""
+        """Run time-based rules for every game that has scheduled work. Call it every minute.
+
+        Announcements are saved to each game's outbox together with the state change that
+        caused them; deliver them with undelivered() and mark_delivered(). The return value
+        lists the notifications queued by this call, which is handy in tests.
+        """
         out: list[Notification] = []
-        for game in self._repo.list_active():
+        for game in self._repo.list_needing_attention():
             try:
-                out.extend(await self._tick_game(game.channel_key))
+                out.extend(await self._tick_game(game.id))
             except Exception:  # one broken game must not stop the others
-                log.exception("tick failed for %s", game.channel_key)
+                log.exception("tick failed for game %s (%s)", game.id, game.channel_key)
         return out
 
-    async def _tick_game(self, channel_key: str) -> list[Notification]:
+    def undelivered(self) -> list[OutboxEntry]:
+        """Every queued announcement, oldest first within each game."""
+        return [e for game in self._repo.list_needing_attention() for e in game.outbox]
+
+    async def mark_delivered(self, entry: OutboxEntry) -> None:
+        """Remove an announcement from its game's outbox once it has been sent (or dropped)."""
+        snapshot = self._repo.get(entry.game_id)
+        if snapshot is None:
+            return
+        async with self._locks[snapshot.channel_key]:
+            game = self._repo.get(entry.game_id)
+            if game is None:
+                return
+            before = len(game.outbox)
+            game.outbox = [e for e in game.outbox if e.id != entry.id]
+            if len(game.outbox) != before:
+                self._repo.save(game)
+
+    async def _tick_game(self, game_id: str) -> list[Notification]:
         now = self._clock.now()
-        snapshot = self._repo.find_by_channel(channel_key)
-        if not snapshot or snapshot.status != GameStatus.ACTIVE:
+        snapshot = self._repo.get(game_id)
+        if snapshot is None:
             return []
-        end = snapshot.config.end_date
-        assert end is not None and snapshot.last_leaderboard_at is not None
-        ending = now >= end
-        weekly_due = not ending and now >= snapshot.last_leaderboard_at + LEADERBOARD_INTERVAL
-        quotes = await self._fetch_quotes(snapshot) if (ending or weekly_due) else {}
+        need_prices = snapshot.final_prices_due_since is not None
+        if snapshot.status == GameStatus.ACTIVE:
+            end = snapshot.config.end_date
+            assert end is not None and snapshot.last_leaderboard_at is not None
+            need_prices = now >= end or now >= snapshot.last_leaderboard_at + LEADERBOARD_INTERVAL
+        quotes, prices_ok = await self._try_fetch_quotes(snapshot) if need_prices else ({}, True)
 
         out: list[Notification] = []
-        async with self._locks[channel_key]:
-            game = self._repo.find_by_channel(channel_key)
-            if not game or game.status != GameStatus.ACTIVE:
+        async with self._locks[snapshot.channel_key]:
+            game = self._repo.get(game_id)
+            if game is None:
                 return []
-            cfg = game.config
-            end = cfg.end_date
-            assert end is not None and game.last_top_off_at and game.last_leaderboard_at
+            key = game.channel_key
+            if game.status == GameStatus.ACTIVE:
+                cfg = game.config
+                end = cfg.end_date
+                assert end is not None and game.last_top_off_at and game.last_leaderboard_at
+                ending = now >= end
 
-            for pending in game.pending.values():
-                if pending.status == PendingStatus.OPEN and now >= pending.expires_at:
-                    pending.status = PendingStatus.EXPIRED
-                    pending.resolved_at = pending.expires_at
-                    if not ending and not pending.timeout_announced:
-                        out.append(PendingTimedOut(channel_key, pending))
-                    pending.timeout_announced = True
-            for pid in [
-                pid
-                for pid, p in game.pending.items()
-                if p.status != PendingStatus.OPEN
-                and p.resolved_at
-                and now - p.resolved_at > PENDING_RETENTION
-            ]:
-                del game.pending[pid]
+                for pending in game.pending.values():
+                    if pending.status == PendingStatus.OPEN and now >= pending.expires_at:
+                        pending.status = PendingStatus.EXPIRED
+                        pending.resolved_at = pending.expires_at
+                        if not ending and not pending.timeout_announced:
+                            out.append(PendingTimedOut(key, pending))
+                        pending.timeout_announced = True
+                for pid in [
+                    pid
+                    for pid, p in game.pending.items()
+                    if p.status != PendingStatus.OPEN
+                    and p.resolved_at
+                    and now - p.resolved_at > PENDING_RETENTION
+                ]:
+                    del game.pending[pid]
 
-            interval = timedelta(days=cfg.top_off_days)
-            while game.last_top_off_at + interval <= now and game.last_top_off_at + interval < end:
-                game.last_top_off_at += interval
-                if cfg.top_off_budget > 0:
-                    for player in game.players:
-                        player.balance += cfg.top_off_budget
-                    out.append(BudgetToppedOff(channel_key, cfg.top_off_budget, game.last_top_off_at))
+                interval = timedelta(days=cfg.top_off_days)
+                while game.last_top_off_at + interval <= now and game.last_top_off_at + interval < end:
+                    game.last_top_off_at += interval
+                    if cfg.top_off_budget > 0:
+                        for player in game.players:
+                            player.balance += cfg.top_off_budget
+                        out.append(BudgetToppedOff(key, cfg.top_off_budget, game.last_top_off_at))
 
-            if ending:
-                self._apply_quotes(game, quotes)
-                game.status = GameStatus.FINISHED
-                game.ended_at = end
-                out.append(GameEnded(channel_key, self._leaderboard(game)))
-            elif now >= game.last_leaderboard_at + LEADERBOARD_INTERVAL:
-                self._apply_quotes(game, quotes)
-                while now >= game.last_leaderboard_at + LEADERBOARD_INTERVAL:
-                    game.last_leaderboard_at += LEADERBOARD_INTERVAL
-                out.append(WeeklyLeaderboard(channel_key, self._leaderboard(game)))
+                if ending:
+                    # Trading stops at endDate no matter what. The final announcement waits
+                    # (below) until final prices are in, up to FINAL_PRICE_GRACE.
+                    game.status = GameStatus.FINISHED
+                    game.ended_at = end
+                    game.final_prices_due_since = now
+                elif now >= game.last_leaderboard_at + LEADERBOARD_INTERVAL:
+                    self._apply_quotes(game, quotes)
+                    while now >= game.last_leaderboard_at + LEADERBOARD_INTERVAL:
+                        game.last_leaderboard_at += LEADERBOARD_INTERVAL
+                    out.append(WeeklyLeaderboard(key, self._leaderboard(game)))
+
+            due = game.final_prices_due_since
+            if due is not None:
+                if prices_ok or now - due >= FINAL_PRICE_GRACE:
+                    if not prices_ok:
+                        log.warning("final prices for game %s unavailable; using last known", game.id)
+                    self._apply_quotes(game, quotes)
+                    game.final_prices_due_since = None
+                    out.append(GameEnded(key, self._leaderboard(game)))
+
+            for note in out:
+                game.outbox_seq += 1
+                game.outbox.append(OutboxEntry(str(game.outbox_seq), game.id, now, note))
+            stale = [e for e in game.outbox if now - e.created_at > OUTBOX_RETENTION]
+            for entry in stale:
+                log.warning("dropping announcement %s for game %s: undeliverable for %s",
+                            entry.id, game.id, OUTBOX_RETENTION)
+            if stale:
+                game.outbox = [e for e in game.outbox if e not in stale]
             self._repo.save(game)
         return out
 
@@ -510,6 +560,17 @@ class GameService:
         if quote.price is None:
             raise errors.PriceUnavailable(quote.name)
         return quote
+
+    async def _try_fetch_quotes(self, game: Game) -> tuple[dict[str, CardQuote], bool]:
+        """Fetch current prices for every held card. Returns (quotes, succeeded)."""
+        ids = game.held_card_ids()
+        if not ids:
+            return {}, True
+        try:
+            return await self._prices.quotes(ids), True
+        except errors.PriceServiceError:
+            log.warning("price refresh failed for game %s", game.id)
+            return {}, False
 
     async def _fetch_quotes(self, game: Game) -> dict[str, CardQuote]:
         if game.status == GameStatus.FINISHED:

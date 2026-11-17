@@ -17,8 +17,22 @@ from .models import (
     TradeRecord,
 )
 from .pricing import CardQuote
+from .results import (
+    BudgetToppedOff,
+    GameEnded,
+    Leaderboard,
+    Notification,
+    OutboxEntry,
+    PendingTimedOut,
+    Standing,
+    WeeklyLeaderboard,
+)
 
-SCHEMA_VERSION = 1
+# Bump when the stored format changes, and teach game_from_dict to read older versions.
+#   1: initial format
+#   2: adds outbox, outbox_seq, final_prices_due_since
+SCHEMA_VERSION = 2
+SUPPORTED_VERSIONS = {1, 2}
 
 
 def _dt(value: datetime | None) -> str | None:
@@ -56,7 +70,57 @@ def game_to_dict(game: Game) -> dict[str, Any]:
         "last_top_off_at": _dt(game.last_top_off_at),
         "last_leaderboard_at": _dt(game.last_leaderboard_at),
         "pending_seq": game.pending_seq,
+        "outbox": [_outbox_to_dict(e) for e in game.outbox],
+        "outbox_seq": game.outbox_seq,
+        "final_prices_due_since": _dt(game.final_prices_due_since),
     }
+
+
+def _leaderboard_to_dict(board: Leaderboard) -> dict[str, Any]:
+    return {"standings": [asdict(s) for s in board.standings], "final": board.final}
+
+
+def _leaderboard_from_dict(data: dict[str, Any]) -> Leaderboard:
+    return Leaderboard([Standing(**s) for s in data["standings"]], data["final"])
+
+
+def _notification_to_dict(n: Notification) -> dict[str, Any]:
+    if isinstance(n, PendingTimedOut):
+        return {"kind": "pending_timed_out", "channel_key": n.channel_key,
+                "pending": _pending_to_dict(n.pending)}
+    if isinstance(n, BudgetToppedOff):
+        return {"kind": "budget_topped_off", "channel_key": n.channel_key,
+                "amount": n.amount, "at": _dt(n.at)}
+    if isinstance(n, WeeklyLeaderboard):
+        return {"kind": "weekly_leaderboard", "channel_key": n.channel_key,
+                "leaderboard": _leaderboard_to_dict(n.leaderboard)}
+    if isinstance(n, GameEnded):
+        return {"kind": "game_ended", "channel_key": n.channel_key,
+                "leaderboard": _leaderboard_to_dict(n.leaderboard)}
+    raise TypeError(f"cannot serialize {n!r}")
+
+
+def _notification_from_dict(d: dict[str, Any]) -> Notification:
+    kind, key = d["kind"], d["channel_key"]
+    if kind == "pending_timed_out":
+        return PendingTimedOut(key, _pending_from_dict(d["pending"]))
+    if kind == "budget_topped_off":
+        return BudgetToppedOff(key, d["amount"], _parse_dt(d["at"]))
+    if kind == "weekly_leaderboard":
+        return WeeklyLeaderboard(key, _leaderboard_from_dict(d["leaderboard"]))
+    if kind == "game_ended":
+        return GameEnded(key, _leaderboard_from_dict(d["leaderboard"]))
+    raise ValueError(f"unknown notification kind: {kind}")
+
+
+def _outbox_to_dict(e: OutboxEntry) -> dict[str, Any]:
+    return {"id": e.id, "game_id": e.game_id, "created_at": _dt(e.created_at),
+            "notification": _notification_to_dict(e.notification)}
+
+
+def _outbox_from_dict(d: dict[str, Any]) -> OutboxEntry:
+    return OutboxEntry(d["id"], d["game_id"], _parse_dt(d["created_at"]),
+                       _notification_from_dict(d["notification"]))
 
 
 def _pending_to_dict(p: PendingAction) -> dict[str, Any]:
@@ -79,9 +143,32 @@ def _pending_to_dict(p: PendingAction) -> dict[str, Any]:
     }
 
 
+def _pending_from_dict(p: dict[str, Any]) -> PendingAction:
+    return PendingAction(
+        id=p["id"],
+        kind=PendingKind(p["kind"]),
+        user_id=p["user_id"],
+        created_at=_parse_dt(p["created_at"]),
+        expires_at=_parse_dt(p["expires_at"]),
+        status=PendingStatus(p["status"]),
+        card=CardQuote(**p["card"]) if p["card"] else None,
+        quantity=p["quantity"],
+        unit_price=p["unit_price"],
+        fee=p["fee"],
+        setting_name=p["setting_name"],
+        setting_value=p["setting_value"],
+        external_ref=p["external_ref"],
+        timeout_announced=p["timeout_announced"],
+        resolved_at=_parse_dt(p["resolved_at"]),
+    )
+
+
 def game_from_dict(data: dict[str, Any]) -> Game:
-    if data.get("schema") != SCHEMA_VERSION:
-        raise ValueError(f"unsupported game schema version: {data.get('schema')}")
+    if data.get("schema") not in SUPPORTED_VERSIONS:
+        raise ValueError(
+            f"unsupported game schema version {data.get('schema')}; "
+            "this database was written by a newer version of Fantasy MTG"
+        )
     cfg = dict(data["config"])
     cfg["end_date"] = _parse_dt(cfg.get("end_date"))
     players = [
@@ -93,25 +180,7 @@ def game_from_dict(data: dict[str, Any]) -> Game:
         )
         for p in data["players"]
     ]
-    pending = {}
-    for p in data["pending"]:
-        pending[p["id"]] = PendingAction(
-            id=p["id"],
-            kind=PendingKind(p["kind"]),
-            user_id=p["user_id"],
-            created_at=_parse_dt(p["created_at"]),
-            expires_at=_parse_dt(p["expires_at"]),
-            status=PendingStatus(p["status"]),
-            card=CardQuote(**p["card"]) if p["card"] else None,
-            quantity=p["quantity"],
-            unit_price=p["unit_price"],
-            fee=p["fee"],
-            setting_name=p["setting_name"],
-            setting_value=p["setting_value"],
-            external_ref=p["external_ref"],
-            timeout_announced=p["timeout_announced"],
-            resolved_at=_parse_dt(p["resolved_at"]),
-        )
+    pending = {p["id"]: _pending_from_dict(p) for p in data["pending"]}
     trades = [
         TradeRecord(**{**t, "executed_at": _parse_dt(t["executed_at"])}) for t in data["trades"]
     ]
@@ -130,4 +199,8 @@ def game_from_dict(data: dict[str, Any]) -> Game:
         last_top_off_at=_parse_dt(data["last_top_off_at"]),
         last_leaderboard_at=_parse_dt(data["last_leaderboard_at"]),
         pending_seq=data["pending_seq"],
+        # added in schema 2
+        outbox=[_outbox_from_dict(e) for e in data.get("outbox", [])],
+        outbox_seq=data.get("outbox_seq", 0),
+        final_prices_due_since=_parse_dt(data.get("final_prices_due_since")),
     )

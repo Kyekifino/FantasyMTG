@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Awaitable, Callable
 
+import aiohttp
 import discord
 from discord import app_commands
 
@@ -21,6 +22,7 @@ from ..core.service import GameService
 from ..presentation import messages
 from ..presentation.commands import COMMANDS
 from .helpers import (
+    Delivery,
     THUMBS_DOWN,
     THUMBS_UP,
     channel_key,
@@ -215,23 +217,43 @@ class FantasyMTGBot(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             try:
-                for note in await self.service.tick():
-                    reply_to = None
-                    if isinstance(note, PendingTimedOut) and note.pending.external_ref:
-                        reply_to = int(note.pending.external_ref)
-                    await self._send(
-                        note.channel_key,
-                        messages.render_notification(note, mention=user_mention),
-                        reply_to=reply_to,
-                    )
+                await self.service.tick()
             except Exception:
                 log.exception("scheduled tick failed")
+            try:
+                await self.deliver_outbox()
+            except Exception:
+                log.exception("delivering announcements failed")
             await asyncio.sleep(self._tick_seconds)
 
-    async def _send(self, key: str, text: str, reply_to: int | None = None) -> None:
+    async def deliver_outbox(self) -> None:
+        """Post queued announcements. Anything that can't be sent yet is retried next tick.
+
+        Each game's announcements go out in order: once one fails to send, the rest of that
+        game's queue waits for the next round.
+        """
+        blocked: set[str] = set()
+        for entry in self.service.undelivered():
+            if entry.game_id in blocked:
+                continue
+            note = entry.notification
+            reply_to = None
+            if isinstance(note, PendingTimedOut) and note.pending.external_ref:
+                reply_to = int(note.pending.external_ref)
+            result = await self._send(
+                note.channel_key,
+                messages.render_notification(note, mention=user_mention),
+                reply_to=reply_to,
+            )
+            if result == Delivery.RETRY:
+                blocked.add(entry.game_id)
+            else:  # SENT, or DROP for a channel the bot can never post in
+                await self.service.mark_delivered(entry)
+
+    async def _send(self, key: str, text: str, reply_to: int | None = None) -> Delivery:
         ids = parse_channel_key(key)
         if ids is None:
-            return
+            return Delivery.DROP
         _, channel_id = ids
         try:
             channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
@@ -243,8 +265,30 @@ class FantasyMTGBot(discord.Client):
                 else None
             )
             await channel.send(fit_message(text), reference=reference)  # type: ignore[union-attr]
-        except discord.HTTPException:
-            log.exception("could not post to channel %s", channel_id)
+        except Exception as exc:
+            result = classify_send_error(exc)
+            if result == Delivery.RETRY:
+                log.warning("could not post to channel %s, will retry: %s", channel_id, exc)
+            else:
+                log.warning("giving up posting to channel %s: %s", channel_id, exc)
+            return result
+        return Delivery.SENT
+
+
+def classify_send_error(exc: BaseException) -> Delivery:
+    """Decide whether a failed send is worth retrying.
+
+    Network problems, timeouts, rate limits and Discord outages are temporary. Missing
+    permissions, deleted channels and other 4xx rejections won't fix themselves.
+    """
+    if isinstance(exc, discord.HTTPException):
+        if exc.status == 429 or exc.status >= 500:
+            return Delivery.RETRY
+        return Delivery.DROP
+    if isinstance(exc, (OSError, asyncio.TimeoutError, aiohttp.ClientError, discord.GatewayNotFound)):
+        return Delivery.RETRY
+    log.error("unexpected error while posting", exc_info=exc)
+    return Delivery.DROP
 
 
 def _register_commands(bot: FantasyMTGBot) -> None:

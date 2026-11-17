@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, Mapping
 
 THUMBS_UP = "👍"
@@ -10,6 +11,14 @@ THUMBS_DOWN = "👎"
 _SKIN_TONES = {chr(cp) for cp in range(0x1F3FB, 0x1F400)}
 _VARIATION_SELECTOR = "️"
 DISCORD_MESSAGE_LIMIT = 2000
+
+
+class Delivery(Enum):
+    """Outcome of trying to post a message."""
+
+    SENT = "sent"
+    RETRY = "retry"  # temporary problem (network, Discord outage): try again later
+    DROP = "drop"  # permanent problem (no access, channel deleted): give up
 
 
 def channel_key(guild_id: int, channel_id: int) -> str:

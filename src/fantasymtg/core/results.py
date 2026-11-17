@@ -122,3 +122,13 @@ class GameEnded:
 
 
 Notification = Union[PendingTimedOut, BudgetToppedOff, WeeklyLeaderboard, GameEnded]
+
+
+@dataclass(frozen=True)
+class OutboxEntry:
+    """A notification saved with its game until an interface confirms it was delivered."""
+
+    id: str  # unique within the game, increasing in creation order
+    game_id: str
+    created_at: datetime
+    notification: Notification

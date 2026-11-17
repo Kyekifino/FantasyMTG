@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 
 from ..adapters.scryfall import ScryfallPriceSource
 from ..adapters.sqlite_repo import SqliteGameRepository
@@ -26,12 +27,32 @@ async def _run() -> None:
     prices = ScryfallPriceSource()
     service = GameService(repo, prices)
     bot = FantasyMTGBot(service, tick_seconds=settings.tick_seconds)
+    _close_on_signals(bot)
     try:
         async with bot:
             await bot.start(settings.token)
     finally:
         await prices.close()
         repo.close()
+
+
+def _close_on_signals(bot) -> None:
+    """Shut down cleanly on `systemctl stop`, `docker stop` or Ctrl+C.
+
+    Without this, SIGTERM kills Python immediately. With it, the bot finishes the step it's
+    on (so a save is never cut off), disconnects from Discord, and closes the database.
+    """
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, lambda s=sig: _request_close(bot, s))
+        except (NotImplementedError, RuntimeError):  # not supported on Windows
+            pass
+
+
+def _request_close(bot, sig: signal.Signals) -> None:
+    logging.getLogger(__name__).info("Received %s, shutting down", sig.name)
+    asyncio.ensure_future(bot.close())
 
 
 def main() -> None:

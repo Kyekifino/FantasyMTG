@@ -4,9 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from .config import GameConfig
 from .pricing import CardQuote
+
+if TYPE_CHECKING:
+    from .results import OutboxEntry
 
 
 class GameStatus(str, Enum):
@@ -135,6 +139,20 @@ class Game:
     last_top_off_at: datetime | None = None
     last_leaderboard_at: datetime | None = None
     pending_seq: int = 0
+    # Announcements waiting to be delivered, oldest first (see GameService.undelivered).
+    outbox: list["OutboxEntry"] = field(default_factory=list)
+    outbox_seq: int = 0
+    # Set when the game ended but final prices couldn't be fetched yet.
+    final_prices_due_since: datetime | None = None
+
+    @property
+    def needs_attention(self) -> bool:
+        """True while scheduled work remains: running, unsent announcements, or final prices."""
+        return (
+            self.status != GameStatus.FINISHED
+            or bool(self.outbox)
+            or self.final_prices_due_since is not None
+        )
 
     def player_by_user(self, user_id: str) -> Player | None:
         return next((p for p in self.players if p.user_id == user_id), None)
