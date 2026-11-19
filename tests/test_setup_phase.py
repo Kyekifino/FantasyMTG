@@ -122,8 +122,64 @@ async def test_game_full(service):
         await service.join_game(CHANNEL, BOB, "Bob")
 
 
-async def test_cannot_join_started_game(started):
-    with pytest.raises(errors.GameNotInSetup):
+async def test_cannot_join_started_game_by_default(started):
+    with pytest.raises(errors.LateJoinNotAllowed):
+        await started.join_game(CHANNEL, "carol", "Carol")
+
+
+async def _allow_late_join(service):
+    change = await service.configure(CHANNEL, ADMIN, "allowLateJoin", "true")
+    await service.respond(CHANNEL, change.pending.id, ADMIN, True)  # mid-game: admin confirms
+
+
+async def test_late_join_when_allowed(started, clock):
+    clock.advance(days=61)
+    await started.tick()  # two top-offs paid to existing players
+    await _allow_late_join(started)
+    carol = await started.join_game(CHANNEL, "carol", "Carol")
+    assert carol.balance == 100_00  # startingBudget only; past top-offs aren't backdated
+    assert player(started, ALICE).balance == 140_00
+    # and they can trade straight away, and get future top-offs
+    proposal = await started.request_buy(CHANNEL, "carol", "bolt", 1)
+    await started.respond(CHANNEL, proposal.pending.id, "carol", True)
+    clock.advance(days=30)
+    await started.tick()
+    assert player(started, "carol").balance == 100_00 - 3_00 + 20_00
+
+
+async def test_late_join_still_respects_limits(started):
+    await _allow_late_join(started)
+    with pytest.raises(errors.NameTaken):
+        await started.join_game(CHANNEL, "carol", "alice")
+    with pytest.raises(errors.AlreadyJoined):
+        await started.join_game(CHANNEL, ALICE, "Alice again")
+    change = await started.configure(CHANNEL, ADMIN, "maxPlayerCount", "2")
+    await started.respond(CHANNEL, change.pending.id, ADMIN, True)
+    with pytest.raises(errors.GameFull):
+        await started.join_game(CHANNEL, "carol", "Carol")
+
+
+async def test_late_join_uses_current_starting_budget(started):
+    for name, value in (("allowLateJoin", "true"), ("startingBudget", "50")):
+        change = await started.configure(CHANNEL, ADMIN, name, value)
+        await started.respond(CHANNEL, change.pending.id, ADMIN, True)
+    assert (await started.join_game(CHANNEL, "carol", "Carol")).balance == 50_00
+
+
+async def test_late_join_setting_can_be_turned_on_before_start(service):
+    await service.create_game(CHANNEL, ADMIN)
+    await service.configure(CHANNEL, ADMIN, "allowLateJoin", "yes")
+    await service.join_game(CHANNEL, ALICE, "Alice")
+    await service.start_game(CHANNEL, ADMIN)
+    await service.join_game(CHANNEL, BOB, "Bob")
+    assert [p.name for p in service.get_game(CHANNEL).players] == ["Alice", "Bob"]
+
+
+async def test_no_late_join_after_game_ends(started, clock):
+    await _allow_late_join(started)
+    clock.advance(days=366)
+    await started.tick()
+    with pytest.raises(errors.GameFinished):
         await started.join_game(CHANNEL, "carol", "Carol")
 
 

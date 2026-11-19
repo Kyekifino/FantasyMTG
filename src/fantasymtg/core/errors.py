@@ -28,6 +28,10 @@ class GameNotInSetup(GameError):
     """The action is only allowed before the game starts (e.g. joining)."""
 
 
+class LateJoinNotAllowed(GameError):
+    """The game has started and the admin hasn't turned on allowLateJoin."""
+
+
 class GameNotActive(GameError):
     """The action is only allowed while the game is running (e.g. trading)."""
 

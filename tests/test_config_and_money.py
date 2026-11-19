@@ -43,6 +43,7 @@ def test_defaults_match_spec():
     assert cfg.top_off_days == 30
     assert cfg.top_off_budget == 20_00
     assert cfg.unique_ownership is True
+    assert cfg.allow_late_join is False
     assert cfg.end_date is None  # one year after start
 
 
@@ -63,5 +64,5 @@ def test_describe_lists_every_setting():
     names = [s.name for s, _ in describe(GameConfig())]
     assert names == [
         "endDate", "maxPlayerCount", "startingBudget", "maxSpecNumber",
-        "tradeFee", "topOffDays", "topOffBudget", "uniqueOwnership",
+        "tradeFee", "topOffDays", "topOffBudget", "uniqueOwnership", "allowLateJoin",
     ]

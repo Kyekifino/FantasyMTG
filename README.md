@@ -163,7 +163,7 @@ sudo systemctl start fantasymtg
 |---|---|
 | `/creategame` | Create a game in this channel. You become its admin. |
 | `/configure [variable] [value]` | Admin only. No arguments lists settings. Mid-game changes need a 👍 from the admin. |
-| `/joingame <name>` | Join before the game starts. |
+| `/joingame <name>` | Join before the game starts (or later, if `allowLateJoin` is on). |
 | `/startgame` | Admin only. Starts the game now. |
 | `/buy <scryfall_link> <quantity>` | Quote a purchase. React 👍 within 30 minutes to confirm, 👎 to cancel. |
 | `/sell <scryfall_link> <quantity>` | Quote a sale. Confirm the same way. |
@@ -186,6 +186,7 @@ leaderboard, and the final standings with congratulations when the game ends.
 | `topOffDays` | 30 | |
 | `topOffBudget` | $20 | 0 disables top-offs |
 | `uniqueOwnership` | true | Only one player may own a given card |
+| `allowLateJoin` | false | Let players join after the game has started |
 
 ### Rules decisions not spelled out in the spec
 
@@ -202,6 +203,9 @@ leaderboard, and the final standings with congratulations when the game ends.
 - **Confirmations:** the quoted price *and* fee are locked in. Everything else (funds,
   ownership, card limit, copies owned) is checked again when the player confirms, so racing
   quotes are settled fairly: whoever confirms first wins.
+- **Late joining:** with `allowLateJoin` on, people can join a game in progress, still up to
+  `maxPlayerCount`. They start with the current `startingBudget` and get every top-off from
+  then on, but top-offs paid before they joined aren't backdated.
 - **Mid-game config changes** apply from then on. Changing `startingBudget` doesn't change
   existing balances, and lowering `maxSpecNumber` or turning on `uniqueOwnership` doesn't
   force anyone to sell. Config confirmations also expire after 30 minutes.

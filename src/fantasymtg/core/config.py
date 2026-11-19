@@ -21,6 +21,7 @@ class GameConfig:
     top_off_days: int = 30
     top_off_budget: int = 20_00
     unique_ownership: bool = True
+    allow_late_join: bool = False
 
     def with_value(self, attr: str, value: Any) -> "GameConfig":
         return replace(self, **{attr: value})
@@ -110,6 +111,9 @@ SETTINGS: tuple[Setting, ...] = (
             parse_money, format_money, _min(0)),
     Setting("uniqueOwnership", "unique_ownership", "boolean",
             "If true, only one player may own a given card at a time.",
+            _parse_bool, lambda v: "true" if v else "false"),
+    Setting("allowLateJoin", "allow_late_join", "boolean",
+            "If true, players may join after the game has started (with startingBudget).",
             _parse_bool, lambda v: "true" if v else "false"),
 )
 

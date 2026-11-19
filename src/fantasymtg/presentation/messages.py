@@ -5,7 +5,7 @@ from typing import Callable
 
 from ..core import errors
 from ..core.config import Setting, format_datetime
-from ..core.models import Game, PendingAction, PendingKind, Player
+from ..core.models import Game, GameStatus, PendingAction, PendingKind, Player
 from ..core.money import format_money
 from ..core.results import (
     BudgetToppedOff,
@@ -46,7 +46,10 @@ def render_error(exc: errors.GameError, prefix: str = "/") -> str:
     if isinstance(exc, e.NotAdmin):
         return "Sorry, only the game's admin can do that."
     if isinstance(exc, e.GameNotInSetup):
-        return "Sorry, this game has already started, so it can't be joined or started again."
+        return "This game has already started, so it can't be started again."
+    if isinstance(exc, e.LateJoinNotAllowed):
+        return ("Sorry, this game has already started, so you can't join it. "
+                "The admin can allow late joins by setting `allowLateJoin` to true.")
     if isinstance(exc, e.GameNotActive):
         return "The game hasn't started yet, so trading isn't open. The admin can start it once everyone has joined."
     if isinstance(exc, e.GameFinished):
@@ -123,8 +126,11 @@ def render_configure(result: ConfigureResult) -> str:
 
 
 def render_joined(player: Player, game: Game) -> str:
-    return (f"👋 Welcome, **{player.name}**! You're player {len(game.players)} of "
+    text = (f"👋 Welcome, **{player.name}**! You're player {len(game.players)} of "
             f"{game.config.max_player_count}.")
+    if game.status == GameStatus.ACTIVE:
+        text += f" The game is already underway, so you start trading now with {m(player.balance)}."
+    return text
 
 
 def render_started(game: Game) -> str:

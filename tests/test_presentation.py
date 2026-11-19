@@ -70,6 +70,14 @@ def test_game_end_message_congratulates_winner_and_ties():
     assert "tie" in messages.render_notification(tie)
 
 
+async def test_late_join_welcome_mentions_budget(started):
+    change = await started.configure(CHANNEL, "admin", "allowLateJoin", "true")
+    await started.respond(CHANNEL, change.pending.id, "admin", True)
+    carol = await started.join_game(CHANNEL, "carol", "Carol")
+    text = messages.render_joined(carol, started.get_game(CHANNEL))
+    assert "already underway" in text and "$100.00" in text
+
+
 def test_mentions_are_injected():
     from fantasymtg.core.models import Game
     from conftest import START

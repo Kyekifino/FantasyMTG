@@ -141,8 +141,8 @@ class GameService:
             game = self._require_game(channel_key)
             if game.status == GameStatus.FINISHED:
                 raise errors.GameFinished()
-            if game.status != GameStatus.SETUP:
-                raise errors.GameNotInSetup()
+            if game.status == GameStatus.ACTIVE and not game.config.allow_late_join:
+                raise errors.LateJoinNotAllowed()
             existing = game.player_by_user(user_id)
             if existing:
                 raise errors.AlreadyJoined(existing.name)
@@ -150,6 +150,7 @@ class GameService:
                 raise errors.GameFull(game.config.max_player_count)
             if game.player_by_name(name):
                 raise errors.NameTaken(name)
+            # Mid-game joiners get startingBudget only; top-offs already paid aren't backdated.
             player = Player(user_id=user_id, name=name, balance=game.config.starting_budget)
             game.players.append(player)
             self._repo.save(game)

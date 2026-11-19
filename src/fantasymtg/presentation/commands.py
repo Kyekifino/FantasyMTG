@@ -53,8 +53,10 @@ COMMANDS: tuple[CommandDoc, ...] = (
         "joingame",
         "Join the game in this channel under a display name.",
         "Adds you as a player to this channel's game, using the name you provide (names must be "
-        "unique within the game). You can only join before the game starts, and only while there "
-        "is room.",
+        "unique within the game), as long as there is room. Normally you can only join before "
+        "the game starts. If the admin has set `allowLateJoin` to true, you can also join a "
+        "game in progress, starting with `startingBudget` (top-offs already paid out aren't "
+        "included).",
         (Arg("name", "Your display name in this game"),),
     ),
     CommandDoc(

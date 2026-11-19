@@ -89,3 +89,10 @@ def test_sqlite_persists_across_connections(tmp_path):
 def test_unknown_schema_rejected():
     with pytest.raises(ValueError):
         game_from_dict({"schema": 999})
+
+
+def test_games_saved_before_allow_late_join_existed_default_to_off():
+    from fantasymtg.core.models import Game
+    data = game_to_dict(Game(id="g", channel_key=CHANNEL, admin_id=ADMIN, created_at=START))
+    del data["config"]["allow_late_join"]  # as written by the previous release
+    assert game_from_dict(data).config.allow_late_join is False
