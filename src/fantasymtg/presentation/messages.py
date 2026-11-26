@@ -6,7 +6,7 @@ from typing import Callable
 from ..core import errors
 from ..core.config import Setting, format_datetime
 from ..core.models import Game, GameStatus, PendingAction, PendingKind, Player
-from ..core.money import format_money
+from ..core.money import format_change, format_money
 from ..core.results import (
     BudgetToppedOff,
     ConfigApplied,
@@ -23,10 +23,12 @@ from ..core.results import (
     WeeklyLeaderboard,
 )
 from .commands import COMMANDS, find_command
-from .table import render_table, truncate
+from .table import render_table, truncate, truncate_keeping_suffix
 
 CONFIRM_HINT = "React 👍 to confirm or 👎 to cancel within 30 minutes."
-MISSED_REACTION_NOTE = "I was offline when you reacted, but I've caught up. "
+PORTFOLIO_WIDTH = 72  # widest portfolio row, in characters, before card names are shortened
+PORTFOLIO_MIN_CARD_WIDTH = 24
+MISSED_REACTION_NOTE ="I was offline when you reacted, but I've caught up. "
 m = format_money
 Mention = Callable[[str], str]
 
@@ -196,17 +198,37 @@ def render_outcome(outcome: ResponseOutcome) -> str:
 def render_portfolio(p: Portfolio) -> str:
     title = f"📒 **{p.player_name}'s portfolio**" + (" (final)" if p.final else "")
     if p.lines:
-        rows = [
-            (truncate(line.label, 36), str(line.quantity),
-             m(line.unit_price) if line.unit_price is not None else "n/a", m(line.value))
+        headers = ("Card", "Qty", "Paid", "Price", "Δ", "Value")
+        numbers = [
+            (str(line.quantity), _money_or_na(line.avg_cost), _money_or_na(line.unit_price),
+             _money_or_na(line.delta, format_change), m(line.value))
             for line in p.lines
         ]
-        table = render_table(("Card", "Qty", "Price", "Value"), rows, align_right=(1, 2, 3))
+        # The card column gets whatever width the number columns leave, so names are only
+        # shortened when the row would otherwise wrap in a typical desktop Discord window.
+        others = sum(max(len(h), *(len(r[i]) for r in numbers)) for i, h in enumerate(headers[1:]))
+        card_width = max(PORTFOLIO_MIN_CARD_WIDTH,
+                         PORTFOLIO_WIDTH - others - 2 * (len(headers) - 1))
+        rows = [
+            (truncate_keeping_suffix(line.name, line.printing, card_width), *nums)
+            for line, nums in zip(p.lines, numbers)
+        ]
+        table = render_table(headers, rows, align_right=(1, 2, 3, 4, 5))
+        cards = (f"Cards: **{m(p.holdings_value)}** "
+                 f"({format_change(p.unrealized)}{_percent(p.unrealized, p.cost_basis)})")
     else:
         table = "_No cards yet._"
+        cards = f"Cards: **{m(p.holdings_value)}**"
     return (f"{title}\n{table}\n"
-            f"Cards: **{m(p.holdings_value)}** · Free budget: **{m(p.balance)}** · "
-            f"Total value: **{m(p.total)}**")
+            f"{cards} · Free budget: **{m(p.balance)}** · Total value: **{m(p.total)}**")
+
+
+def _money_or_na(cents: int | None, fmt: Callable[[int], str] = format_money) -> str:
+    return fmt(cents) if cents is not None else "n/a"
+
+
+def _percent(change: int, base: int) -> str:
+    return f", {change / base * 100:+.1f}%" if base > 0 else ""
 
 
 def render_leaderboard(board: Leaderboard, title: str = "🏆 **Leaderboard**") -> str:

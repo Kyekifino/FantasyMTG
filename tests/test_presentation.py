@@ -6,7 +6,7 @@ from fantasymtg.core import errors
 from fantasymtg.core.results import GameEnded, Leaderboard, Standing
 from fantasymtg.presentation import messages
 from fantasymtg.presentation.commands import COMMANDS, find_command
-from fantasymtg.presentation.table import render_table, truncate
+from fantasymtg.presentation.table import render_table, truncate, truncate_keeping_suffix
 from conftest import ALICE, CHANNEL, buy
 
 
@@ -84,3 +84,44 @@ def test_mentions_are_injected():
     game = Game(id="g", channel_key="c", admin_id="42", created_at=START)
     assert "<@42>" in messages.render_game_created(game, mention=lambda u: f"<@{u}>")
     assert "<@" not in messages.render_game_created(game)
+
+
+async def test_portfolio_render_shows_paid_and_delta(started, prices):
+    await buy(started, ALICE, "ring", 1)
+    prices.set("ring", 50_00, "Sol Ring")
+    text = messages.render_portfolio(await started.portfolio(CHANNEL, ALICE))
+    assert "Paid" in text and "Δ" in text
+    assert "$40.00" in text and "+$10.00" in text
+    assert "Cards: **$50.00** (+$10.00, +25.0%)" in text
+
+
+async def test_portfolio_rows_stay_narrow(started, prices):
+    prices.set("c0", 1_00, "Asmoranomardicadaistinaculdacar, the Very Long Name")
+    await buy(started, ALICE, "c0", 10)
+    prices.set("c0", 1234_56, "Asmoranomardicadaistinaculdacar, the Very Long Name")
+    text = messages.render_portfolio(await started.portfolio(CHANNEL, ALICE))
+    table = text.split("```")[1]
+    assert "+$1,233.56" in table and "$12,345.60" in table
+    # Even with four-figure prices, rows stay within the target width and keep the set code.
+    assert max(len(row) for row in table.splitlines()) <= messages.PORTFOLIO_WIDTH
+    assert "Asmoranomardica… (TST #1)" in table
+
+
+def test_truncate_keeping_suffix():
+    assert truncate_keeping_suffix("Sol Ring", "(LEA #270)", 40) == "Sol Ring (LEA #270)"
+    assert (truncate_keeping_suffix("Avacyn, Angel of Horror", "(FRC #7)", 29)
+            == "Avacyn, Angel of Ho… (FRC #7)")
+    out = truncate_keeping_suffix("Avacyn, Angel of Horror", "(FRC #7)", 29)
+    assert len(out) == 29
+    # no room for the suffix plus a few letters: plain truncation
+    assert truncate_keeping_suffix("Avacyn", "(FRC #7)", 10) == "Avacyn (F…"
+
+
+async def test_portfolio_gives_spare_width_to_card_names(started, prices):
+    name = "Asmoranomardicadaistinaculda"
+    prices.set("c0", 1_00, name)
+    await buy(started, ALICE, "c0", 1)
+    text = messages.render_portfolio(await started.portfolio(CHANNEL, ALICE))
+    table = text.split("```")[1]
+    assert f"{name} (TST #1)" in table  # 37 characters: wider than the old fixed 28
+    assert max(len(row) for row in table.splitlines()) <= messages.PORTFOLIO_WIDTH

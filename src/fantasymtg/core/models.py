@@ -45,8 +45,12 @@ class Holding:
     url: str | None = None
 
     @property
+    def printing(self) -> str:
+        return f"({self.set_code.upper()} #{self.collector_number})"
+
+    @property
     def label(self) -> str:
-        return f"{self.name} ({self.set_code.upper()} #{self.collector_number})"
+        return f"{self.name} {self.printing}"
 
     @classmethod
     def from_quote(cls, quote: CardQuote, quantity: int, price: int | None) -> "Holding":
@@ -166,6 +170,31 @@ class Game:
             (p for p in self.players if p.user_id != excluding and p.quantity_of(card_id) > 0),
             None,
         )
+
+    def cost_basis(self, user_id: str) -> dict[str, int]:
+        """Total cents paid for the copies of each card a player still holds.
+
+        Replays the trade ledger using weighted average cost: a buy adds its subtotal, and a
+        sell removes cost in proportion to the copies sold, so the average paid per remaining
+        copy is unchanged. Fees are left out, so this is purely the card prices paid.
+        """
+        held: dict[str, tuple[int, int]] = {}  # card id -> (quantity, total cost)
+        for t in self.trades:
+            if t.user_id != user_id:
+                continue
+            qty, cost = held.get(t.card_id, (0, 0))
+            if t.side == "buy":
+                qty, cost = qty + t.quantity, cost + t.quantity * t.unit_price
+            elif qty > 0:
+                remaining = max(qty - t.quantity, 0)
+                # cost * remaining / qty, rounded half up in integer cents
+                cost = (2 * cost * remaining + qty) // (2 * qty)
+                qty = remaining
+            if qty > 0:
+                held[t.card_id] = (qty, cost)
+            else:
+                held.pop(t.card_id, None)
+        return {cid: cost for cid, (_, cost) in held.items()}
 
     def held_card_ids(self) -> set[str]:
         return {cid for p in self.players for cid, h in p.holdings.items() if h.quantity > 0}

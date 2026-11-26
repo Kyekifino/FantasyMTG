@@ -67,11 +67,24 @@ class Standing:
 
 @dataclass(frozen=True)
 class PortfolioLine:
-    label: str
+    name: str
+    printing: str  # e.g. "(LEA #161)"; kept separate so it survives truncating the name
     quantity: int
     unit_price: int | None
     value: int
     url: str | None
+    avg_cost: int | None = None  # average cents paid per copy, excluding fees
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} {self.printing}"
+
+    @property
+    def delta(self) -> int | None:
+        """Change per copy from the average paid to the current price."""
+        if self.unit_price is None or self.avg_cost is None:
+            return None
+        return self.unit_price - self.avg_cost
 
 
 @dataclass(frozen=True)
@@ -82,6 +95,11 @@ class Portfolio:
     holdings_value: int
     total: int
     final: bool  # True when the game has ended and values are frozen
+    cost_basis: int = 0  # total paid for the cards still held, excluding fees
+
+    @property
+    def unrealized(self) -> int:
+        return self.holdings_value - self.cost_basis
 
 
 @dataclass(frozen=True)

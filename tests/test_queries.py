@@ -1,7 +1,7 @@
 import pytest
 
 from fantasymtg.core import errors
-from conftest import ALICE, BOB, CHANNEL, buy
+from conftest import ALICE, BOB, CHANNEL, buy, sell
 
 
 async def test_portfolio_defaults_to_requester(started):
@@ -58,3 +58,42 @@ async def test_leaderboard_before_start(service):
 async def test_player_names(started):
     assert started.player_names(CHANNEL) == ["Alice", "Bob"]
     assert started.player_names("nowhere") == []
+
+
+async def test_portfolio_shows_average_paid_and_delta(started, prices):
+    await buy(started, ALICE, "ring", 1)  # $40
+    prices.set("ring", 50_00, "Sol Ring")
+    await buy(started, ALICE, "ring", 1)  # $50 -> average $45
+    prices.set("ring", 48_00, "Sol Ring")
+    p = await started.portfolio(CHANNEL, ALICE)
+    line = p.lines[0]
+    assert (line.avg_cost, line.unit_price, line.delta) == (45_00, 48_00, 3_00)
+    assert p.cost_basis == 90_00  # fees excluded
+    assert p.unrealized == 6_00
+
+
+async def test_selling_keeps_average_paid(started, prices):
+    await buy(started, ALICE, "bolt", 2)  # $1
+    prices.set("bolt", 2_00, "Lightning Bolt")
+    await buy(started, ALICE, "bolt", 1)  # $2 -> 3 copies, $4 total
+    await sell(started, ALICE, "bolt", 2)
+    p = await started.portfolio(CHANNEL, ALICE)
+    assert p.lines[0].quantity == 1
+    assert p.lines[0].avg_cost == 1_33
+    assert p.cost_basis == 1_33
+
+
+async def test_selling_out_then_rebuying_starts_fresh(started, prices):
+    await buy(started, ALICE, "bolt", 1)
+    await sell(started, ALICE, "bolt", 1)
+    prices.set("bolt", 3_00, "Lightning Bolt")
+    await buy(started, ALICE, "bolt", 1)
+    p = await started.portfolio(CHANNEL, ALICE)
+    assert (p.lines[0].avg_cost, p.lines[0].delta) == (3_00, 0)
+
+
+async def test_cost_basis_ignores_other_players(started, prices):
+    await buy(started, BOB, "bolt", 1)
+    prices.set("bolt", 5_00, "Lightning Bolt")
+    await buy(started, ALICE, "ring", 1)
+    assert started.get_game(CHANNEL).cost_basis(ALICE) == {"ring": 40_00}

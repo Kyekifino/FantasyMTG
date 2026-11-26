@@ -305,13 +305,19 @@ class GameService:
         game = await self._refresh_prices(channel_key)
         player = game.player_by_name(name) if name else game.player_by_user(requester_id)
         assert player is not None
+        costs = game.cost_basis(player.user_id)
         lines = [
             PortfolioLine(
-                label=h.label,
+                name=h.name,
+                printing=h.printing,
                 quantity=h.quantity,
                 unit_price=h.last_price,
                 value=h.quantity * (h.last_price or 0),
                 url=h.url,
+                avg_cost=(
+                    (2 * costs[h.card_id] + h.quantity) // (2 * h.quantity)
+                    if h.card_id in costs else None
+                ),
             )
             for h in sorted(
                 player.holdings.values(), key=lambda h: -(h.quantity * (h.last_price or 0))
@@ -325,6 +331,7 @@ class GameService:
             holdings_value=player.holdings_value(),
             total=player.total_value(),
             final=game.status == GameStatus.FINISHED,
+            cost_basis=sum(c for cid, c in costs.items() if cid in player.holdings),
         )
 
     async def leaderboard(self, channel_key: str) -> Leaderboard:

@@ -38,3 +38,8 @@ def format_money(cents: Cents) -> str:
     sign = "-" if cents < 0 else ""
     cents = abs(cents)
     return f"{sign}${cents // 100:,}.{cents % 100:02d}"
+
+
+def format_change(cents: Cents) -> str:
+    """Like format_money, but always signed: "+$1.50", "-$0.25", "$0.00"."""
+    return ("+" if cents > 0 else "") + format_money(cents)
